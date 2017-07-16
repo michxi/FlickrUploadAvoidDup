@@ -22,11 +22,12 @@ api_key =    unicode(os.environ['API_KEY'])
 api_secret = unicode(os.environ['API_SECRET'])
 
 logging.basicConfig(
-  format = '%(asctime)s %(levelname)s: %(message)s',
+  format = '%(asctime)s %(name)s %(levelname)s: %(message)s',
   filename = 'flickr-uploader.log',
   level = logging.DEBUG)
-#  level = logging.INFO)
-logging.info('running flickr uploading client')
+#  level = logger.INFO)
+logger = logging.getLogger(__name__)
+logger.info('running flickr uploading client')
 
 class FlickrAccess:
   def __init__(self):
@@ -35,7 +36,7 @@ class FlickrAccess:
   def ensurePermission(self, perm):
     uperm = unicode(perm)
     if not self.flickr.token_valid(perms=uperm):
-      logging.info('acquire permission ' + uperm)
+      logger.info('acquire permission ' + uperm)
       # Get a request token
       self.flickr.get_request_token(oauth_callback='oob')
 
@@ -56,7 +57,7 @@ class DuplicateAvoid:
   def __init__(self, flickraccess):
     assert flickraccess != None
 
-    logging.info('opening SQLite file ' + local_db_filename)
+    logger.info('opening SQLite file ' + local_db_filename)
     self.con = lite.connect(local_db_filename)
     self.cur = self.con.cursor()
     self.cur.execute("CREATE TABLE IF NOT EXISTS Uploaded (photoid INT, hash_o TEXT)")
@@ -73,29 +74,32 @@ class DuplicateAvoid:
     self.cur.execute("SELECT * FROM Uploaded WHERE hash_o=?", (filehash,))
     res = self.cur.fetchone()
     if not res == None:
-      logging.info('file ' + fname + ' is already updated as by filehash: ' + filehash)
+      logger.info('file ' + fname + ' is already updated as by filehash: ' + filehash)
       self._suffixfile(fname, '-already-uploaded.jpg')
       return True
 
     # not found in local DB -> check in flickr with machinetag
-    logging.debug('hash ' + filehash + ' not found in DB, now checking with machinetag in flickr')
-    result = self.flickr.photos.search(userid = 'me', machine_tags = 'hash:o=' + filehash)
+    logger.debug('hash ' + filehash + ' not found in DB, now checking with machinetag in flickr')
+    result = self.flickr.photos.search(userid = 'me', machine_tags = filehash)
+    #ET.dump(result)
     total = int(result.find('./photos').get('total'))
 
     if total > 0:
-      logging.info('hash ' + filehash + ' found (count: ' + str(total) + ')in flickr, but not DB -> adding hash to DB')
+      logger.info('hash ' + filehash + ' found (count: ' + str(total) + ')in flickr, but not DB -> adding hash to DB')
       try:
         # fetching id of FIRST photo, skip potential other photos
         photoid = result.find('./photos/photo[1]').get('id')
       except:
-        logging.debug('exception while fetching ID of photo[1], now dumping object')
+        logger.debug('exception while fetching ID of photo[1], now dumping object')
         ET.dump(result)
-        logging.debug(ET.tostring(result))
-        logging.exception('while parsing result')
+        logger.debug(ET.tostring(result))
+        logger.exception('while parsing result')
         raise
       self._adduploadedhash(fname, photoid, filehash)
       self._suffixfile(fname, '-already-uploaded.jpg')
       return True
+    else:
+      logger.debug('hash ' + filehash + ' not found in flickr as machinetag')
 
     return False
 
@@ -103,7 +107,7 @@ class DuplicateAvoid:
     try:
       os.rename(filename, filename + suffix)
     except:
-      logging.exception('while renaming ' + filename)
+      logger.exception('while renaming ' + filename)
       raise
 
   def _adduploadedhash(self, filename, photoid, filehash):
@@ -132,7 +136,7 @@ class DuplicateAvoid:
     # as tagged and therefore wouldn't be listed.
 
     # using normal all image flickr.walk() (basically flickr.photos.search()) doesn't provide filters for non-existing machine tags
-    logging.info('starting walking through all photos on flickr in order to find photos without hash')
+    logger.info('starting walking through all photos on flickr in order to find photos without hash')
     walkingcount = 0
     for walkingphoto in self.flickr.walk(user_id = 'me', extras = 'machine_tags, url_o', per_page = '500'):
       #ET.dump(walkingphoto)
@@ -151,29 +155,29 @@ class DuplicateAvoid:
     else:
       photoid = str(photo)
     print(' updating photoid ' + photoid + ' on flickr with hash')
-    logging.info('updating photoid ' + photoid + ' on flickr with hash')
+    logger.info('updating photoid ' + photoid + ' on flickr with hash')
     if urlo == None:
       # assume photo is elementtree
       urlo = self.url(photo, 'o')
 
-    logging.info('downloading photo (original) of ' + photoid)
+    logger.info('downloading photo (original) of ' + photoid)
     downloaded = urllib.urlretrieve(urlo)
     tmpfile =    downloaded[0]
     filehash =   self.hashoffile(tmpfile)
-    logging.debug('downloaded ' + photoid + ' to ' + tmpfile + ' does have hash: ' + filehash)
+    logger.debug('downloaded ' + photoid + ' to ' + tmpfile + ' does have hash: ' + filehash)
 
-    logging.debug('setting machine tags for photoID ' + photoid)
+    logger.debug('setting machine tags for photoID ' + photoid)
     try:
       self.flickr.photos.addTags(photo_id=photoid, tags = 'hash:o=' + filehash)
     except:
-      logging.exception('while tagging ' + photoid)
+      logger.exception('while tagging ' + photoid)
       raise
     self._adduploadedhash('', photoid, filehash)
     try:
-      logging.debug('removing temporary file ' + tmpfile)
+      logger.debug('removing temporary file ' + tmpfile)
       os.remove(tmpfile)
     except:
-      logging.exception('Could not remove ' + tmpfile)
+      logger.exception('Could not remove ' + tmpfile)
       raise
 
   def hashashintags(self, tags):
@@ -208,7 +212,7 @@ class DuplicateAvoid:
   def updatedbfrommachinetags(self):
     "identify all photos with machinetag and update local sqlite DB"
     counter = 0
-    for walkingphoto in self.flickr.walk(user_id = 'me', extras = 'machine_tags'):
+    for walkingphoto in self.flickr.walk(user_id = 'me', extras = 'machine_tags', per_page = '500'):
       counter += 1
       if counter % 100 == 0:
         print counter
@@ -234,35 +238,35 @@ class UploadFindDuplicate:
         uploadCounter += 1
         if take_saturartion_avoid_break > 0 and uploadCounter % 10 == 0:
           print("++ take a break, so we don't over-saturate our API key on flickr ++")
-          logging.debug("break start: so we don't saturate our API key on flickr")
+          logger.debug("break start: so we don't saturate our API key on flickr")
           time.sleep(take_saturartion_avoid_break)
-          logging.debug("break over")
+          logger.debug("break over")
 
         fname = os.path.join(root, fs)
         if not self.uploadfile(fname):
           uploadCounter -= 1
 
-    logging.info('all images processed')
+    logger.info('all images processed')
 
   def uploadfile(self, fname):
-    logging.debug('calculating SHA256 of ' + fname)
+    logger.debug('calculating SHA256 of ' + fname)
     filehash = self.avoider.hashoffile(fname)
 
     # check if file with this sha256 has already been uploaded
     if self.avoider.isalreadyuploaded(fname, filehash):
-      logging.info('skipping upload as already uploaded: ' + fname + ', SHA256: ' + filehash)
+      logger.info('skipping upload as already uploaded: ' + fname + ', SHA256: ' + filehash)
       print('   skipping upload as already uploaded: ' + fname + ', SHA256: ' + filehash)
       return False
 
     # uploading image
     try:
-      logging.debug('uploading ' + fname)
+      logger.debug('uploading ' + fname)
       print('uploading ' + fname)
       up = self.flickr.upload(filename=fname, is_public=0, is_family=1, is_friend=0, tags = 'hash:o=' + filehash)
       photoid = up.find('./photoid').text
-      logging.info('uploaded ' + fname + ' as PhotoID ' + photoid + ' with hash: ' + filehash)
+      logger.info('uploaded ' + fname + ' as PhotoID ' + photoid + ' with hash: ' + filehash)
     except:
-      logging.exception('unexpected exception while uploading ' + fname)
+      logger.exception('unexpected exception while uploading ' + fname)
       raise
 
     # add filehash to sqlite DB
@@ -272,7 +276,7 @@ class UploadFindDuplicate:
     try:
       os.rename(fname, fname + '-uploaded.jpg')
     except:
-      logging.exception('could not rename ' + fname)
+      logger.exception('could not rename ' + fname)
       raise
     return True
 
