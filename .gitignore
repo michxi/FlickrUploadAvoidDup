@@ -1,2 +1,6 @@
 *.sh
 *.log
+*.jpg
+*.pyc
+*.sqlite
+*.swp
