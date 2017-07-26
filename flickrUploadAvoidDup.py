@@ -4,6 +4,7 @@ Upload to flickr and avoid duplicates.
 
 Unittest: python -m unittest -v flickrUploadAvoidDup
 """
+# https://github.com/sybrenstuvel/flickrapi
 import flickrapi
 import unittest
 import xml.etree.ElementTree as ET
@@ -18,16 +19,17 @@ import sqlite3 as lite
 
 take_saturartion_avoid_break = 60
 local_db_filename = os.path.join(os.getenv('HOME'), 'flickruploadavoiddup.sqlite')
+logfile =           os.path.join(os.getenv('HOME'), 'flickruploadavoiddup.log')
 api_key =    unicode(os.environ['API_KEY'])
 api_secret = unicode(os.environ['API_SECRET'])
 
 logging.basicConfig(
   format = '%(asctime)s %(name)s %(levelname)s: %(message)s',
-  filename = 'flickr-uploader.log',
+  filename = logfile,
   level = logging.DEBUG)
-#  level = logger.INFO)
-logger = logging.getLogger(__name__)
-logger.info('running flickr uploading client')
+#  level = logging.INFO)
+mainlogger = logging.getLogger(__name__)
+mainlogger.info('running flickr uploading client')
 
 class FlickrAccess:
   def __init__(self):
@@ -73,15 +75,21 @@ class LocalDB:
       self.logger.debug('is already registered in local DB (count: ' + str(len(res)) + '). filehash: ' + filehash)
       return True
 
-  def register(self, photoId, filehash):
-    # check, if hash has been already added
-    ret = self.cur.execute("SELECT * FROM Uploaded WHERE hash_o=?", (filehash,))
-    res = ret.fetchall()
-    if len(res) > 0:
-      self.logger.warn('photo with filehash ' + filehash + ' already registered (count: ' + str(len(res)) + '), put we are instructed to add another entry (new photoId: ' + photoId + ')')
+  def register(self, photoId, filehash, checkForAlreadyInserted = False, immediateCommit = True):
+    if checkForAlreadyInserted:
+      # check, if hash has been already added
+      ret = self.cur.execute("SELECT * FROM Uploaded WHERE hash_o=?", (filehash,))
+      res = ret.fetchall()
+      if len(res) > 0:
+        self.logger.warn('photo with filehash ' + filehash + ' already registered (count: ' + str(len(res)) + '), put we are instructed to add another entry (new photoId: ' + photoId + ')')
     
     self.logger.debug('adding photoId: ' + photoId + ' with filehash ' + filehash)
     self.cur.execute("INSERT INTO Uploaded VALUES (?,?)", (photoId, filehash))
+
+    if immediateCommit:
+      self.con.commit()
+
+  def commit(self):
     self.con.commit()
 
   def deregister(self, photoId = None, filehash = None):
@@ -109,12 +117,11 @@ class DuplicateAvoid:
     return hashlib.sha256(open(filename, 'rb').read()).hexdigest()
 
   def isalreadyuploaded_flickr(self, filehash):
-    # https://api.flickr.com/services/rest/?method=flickr.photos.search&api_key=9049a90f7c16a281d578a99534dd27f5&user_id=me&machine_tags=hash%3Ao%3D%229f38318b6ad55089f68cc2efc16e945a1fea21ba548f7f672416b65c227e675c%22&extras=machine_tags%2C+url_o&format=rest&auth_token=72157686302303036-e8ef3ce6a65ea6cf&api_sig=395047fb17d92d094cf9f53392fe7eb7
-    print 'looking for >'+filehash+'<'
-    #result = self.flickr.photos.search(userid = 'me', extras = 'machine_tags', tags = filehash)
-    #result = self.flickr.photos.search(userid = 'me', extras = 'machine_tags', machine_tags = 'hash:o="'+filehash+'"')
-    result = self.flickr.photos.search(userid = 'me', text = '"'+filehash+'"')
-    ET.dump(result)
+    #####  https://github.com/sybrenstuvel/flickrapi/issues/88
+    result = self.flickr.photos.search(userid = 'me', extras = 'machine_tags', machine_tags = unicode('hash:o="'+filehash+'"'))
+    #ET.dump(result)
+    ##for photo in self.flickr.walk(userid='me', machine_tags = unicode('hash:o="'+filehash+'"')):
+    ##  ET.dump(photo)
     total = int(result.find('./photos').get('total'))
     return (total > 0, result)
     
@@ -128,7 +135,7 @@ class DuplicateAvoid:
     try:
       os.rename(filename, filename + suffix)
     except:
-      logger.exception('while renaming ' + filename)
+      self.logger.exception('while renaming ' + filename)
       raise
 
   def getIdFromResult(self, result):
@@ -223,12 +230,14 @@ class DuplicateAvoid:
       counter += 1
       if counter % 100 == 0:
         print counter
+        self.localdb.commit()
       photoid = walkingphoto.get('id')
       mtags =   walkingphoto.get('machine_tags')
       if len(mtags) != 0:
         filehash = mtags[len('hash:o='):]
         assert len(filehash) == len('b1d11fc4e4d551a502bd2fc9572b1e066b3a33a28e5c28e9ce59823ccaf6b83b')
-        self.localdb.register(photoid, filehash)
+        self.localdb.register(photoid, filehash, immediateCommit = False)
+    self.localdb.commit()
 
 
 class UploadFindDuplicate:
@@ -276,7 +285,7 @@ class UploadFindDuplicate:
       photoid = up.find('./photoid').text
       self.logger.info('uploaded ' + fname + ' as PhotoID ' + photoid + ' with hash: ' + filehash)
     except:
-      logger.exception('unexpected exception while uploading ' + fname)
+      self.logger.exception('unexpected exception while uploading ' + fname)
       raise
 
     # register locally
@@ -297,9 +306,9 @@ class TestSomeFlickrRoutines(unittest.TestCase):
     #(already, result) = DuplicateAvoid(FlickrAccess()).isalreadyuploaded_flickr('9f383')
     self.assertTrue(already)
 
-  def test_hashShouldNotExist(self):
-    (already, result) = DuplicateAvoid(FlickrAccess()).isalreadyuploaded_flickr('9f38318b6ad55089f68cc2efc16e945a1fea21ba548f7f672416b65c227a111c')
-    self.assertFalse(already)
+  ##def test_hashShouldNotExist(self):
+  ##  (already, result) = DuplicateAvoid(FlickrAccess()).isalreadyuploaded_flickr('9f38318b6ad55089f68cc2efc16e945a1fea21ba548f7f672416b65c227a111c')
+  ##  self.assertFalse(already)
 
 class TestSomeLocalDBRoutines(unittest.TestCase):
   def test_addCheckRemove(self):
@@ -321,7 +330,7 @@ def main(argv):
     usage()
     sys.exit(2)
   try:
-    opts, args = getopt.getopt(argv, "uof", ["upload", "updateonflickr", "updatefromflickr"])
+    opts, args = getopt.getopt(argv, "uof", ["upload", "updateonflickr", "updatefromflickr", "unittest"])
   except getopt.GetoptError:
     usage()
     sys.exit(2)
@@ -332,6 +341,8 @@ def main(argv):
       DuplicateAvoid(FlickrAccess()).setemptymachinetags()
     elif opt in ("-f", "--updatefromflickr"):
       DuplicateAvoid(FlickrAccess()).updatedbfrommachinetags()
+    elif opt in ("--unittest"):
+      unittest.main()
     else:
       print("unknown " + opt)
 
