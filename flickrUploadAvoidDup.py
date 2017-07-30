@@ -3,16 +3,17 @@
 Upload to flickr and avoid duplicates.
 
 Unittest: python -m unittest -v flickrUploadAvoidDup
+Unittest: python -m unittest -v flickrUploadAvoidDup.TestSomeFlickrRoutines
 """
 # https://github.com/sybrenstuvel/flickrapi
 import flickrapi
 import unittest
+import argparse
 import xml.etree.ElementTree as ET
 import urllib
 import os
 import time
 import sys
-import getopt
 import logging
 import hashlib
 import sqlite3 as lite
@@ -20,8 +21,6 @@ import sqlite3 as lite
 take_saturartion_avoid_break = 60
 local_db_filename = os.path.join(os.getenv('HOME'), 'flickruploadavoiddup.sqlite')
 logfile =           os.path.join(os.getenv('HOME'), 'flickruploadavoiddup.log')
-api_key =    unicode(os.environ['API_KEY'])
-api_secret = unicode(os.environ['API_SECRET'])
 
 logging.basicConfig(
   format = '%(asctime)s %(name)s %(levelname)s: %(message)s',
@@ -33,6 +32,8 @@ mainlogger.info('running flickr uploading client')
 
 class FlickrAccess:
   def __init__(self):
+    api_key =    unicode(os.environ['API_KEY'])
+    api_secret = unicode(os.environ['API_SECRET'])
     self.logger = logging.getLogger(__name__ + '.FlickrAccess')
     self.flickr = flickrapi.FlickrAPI(api_key, api_secret, store_token = True)
 
@@ -104,6 +105,16 @@ class LocalDB:
       self.cur.execute('DELETE FROM Uploaded WHERE hash_o=?', (filehash,))
       self.logger.debug('removed ' + str(self.cur.rowcount) + ' rows')
       self.con.commit()
+
+  def findDupOnHash(self):
+    allDup = self.cur.execute('SELECT count(photoid), hash_o FROM uploaded group by hash_o having count(photoid)>1 order by count(photoid) desc').fetchall()
+    for dup in allDup:
+      fhash = dup[1]
+      print 'hash_o = ' + fhash
+      dupI = self.cur.execute('SELECT * FROM Uploaded WHERE hash_o=?', (fhash,)).fetchall()
+      for dph in dupI:
+        print('  ' + str(dph[0]))
+    return None
 
 class DuplicateAvoid:
   def __init__(self, flickraccess):
@@ -293,6 +304,14 @@ class UploadFindDuplicate:
     self.avoider.suffix(fname, uploaded = True)
     return True
 
+class FindDuplicate:
+  def __init__(self):
+    self.localdb = LocalDB()
+    self.logger = logging.getLogger(__name__ + '.FindDuplicate')
+
+  def findDuplicate(self):
+    for line in self.localdb.findDupOnHash():
+      print(line)
 
 class TestSomeDetails(unittest.TestCase):
   def test_upper(self):
@@ -326,32 +345,34 @@ class TestDuplicateAvoid(unittest.TestCase):
     self.assertTrue(DuplicateAvoid.hashashintags('hash:o=1387162378'))
 
 def main(argv):
-  if len(argv) == 0:
-    usage()
-    sys.exit(2)
-  try:
-    opts, args = getopt.getopt(argv, "uof", ["upload", "updateonflickr", "updatefromflickr", "unittest"])
-  except getopt.GetoptError:
-    usage()
-    sys.exit(2)
-  for opt, args in opts:
-    if opt in ("-u", "--upload"):
-      UploadFindDuplicate(FlickrAccess()).uploadfolder('.')
-    elif opt in ("-o", "--updateonflickr"):
-      DuplicateAvoid(FlickrAccess()).setemptymachinetags()
-    elif opt in ("-f", "--updatefromflickr"):
-      DuplicateAvoid(FlickrAccess()).updatedbfrommachinetags()
-    elif opt in ("--unittest"):
-      unittest.main()
-    else:
-      print("unknown " + opt)
+  parser = argparse.ArgumentParser(description='Upload photos to flickr and avoid duplicates.')
+  parser.add_argument('--upload', help='Upload and update local db, so the same file (based on hash) cannot be uploaded twice')
+  parser.add_argument('--updateonflickr', action='store_true', help='Update all machinetags on flickr and local DB that currently doesn\'t yield an hash')
+  parser.add_argument('--updatefromflickr', action='store_true', help='Update local DB based on hashes on flickr')
+  parser.add_argument('--unittest', action='store_true', help='Run all unittests')
+  parser.add_argument('--debug', action='store_true', help='Increase logging to debug')
+  parser.add_argument('--finddup', action='store_true', help='Find duplicates based on local DB and provid suggestions for removal')
+  args = parser.parse_args()
+  print args
 
-def usage():
-  print("""Upload photos to flickr and avoid duplicates
--u, --upload            upload and update local db, so the same file (based on hash) cannot be uploaded twice
--o, --updateonflickr    update all machinetags on flickr and local DB that currently doesn't yield an hash
--f, --updatefromflickr  x
-""")
+  if args.debug:
+    logging.getLogger().setLevel(logging.DEBUG)
+
+  mainlogger.debug(str(args))
+
+  if args.upload:
+    UploadFindDuplicate(FlickrAccess()).uploadfolder(args.upload)
+  elif args.updateonflickr:
+    DuplicateAvoid(FlickrAccess()).setemptymachinetags()
+  elif args.updatefromflickr:
+    DuplicateAvoid(FlickrAccess()).updatedbfrommachinetags()
+  elif args.unittest:
+    unittest.main()
+  elif args.finddup:
+    FindDuplicate().findDuplicate()
+  else:
+    print('no action indicated')
+    sys.exit(1)
 
 if __name__ == "__main__":
-  main(sys.argv[1:])
+  main(sys.argv)
