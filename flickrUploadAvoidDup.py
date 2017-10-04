@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """
 Upload to flickr and avoid duplicates.
 
@@ -288,11 +289,16 @@ class UploadFindDuplicate:
       print('   skipping upload as already uploaded: ' + fname + ', SHA256: ' + filehash)
       return False
 
+    fname = utf8safepath(fname)
+
     # uploading image
     try:
       self.logger.debug('uploading ' + fname)
       print('uploading ' + fname)
-      up = self.flickr.upload(filename=fname, is_public=0, is_family=1, is_friend=0, tags = 'hash:o=' + filehash)
+      try:
+        up = self.flickr.upload(filename=fname, is_public=0, is_family=1, is_friend=0, tags = 'hash:o=' + filehash)
+      except UnicodeDecodeError:
+        xXXXX
       photoid = up.find('./photoid').text
       self.logger.info('uploaded ' + fname + ' as PhotoID ' + photoid + ' with hash: ' + filehash)
     except:
@@ -304,6 +310,30 @@ class UploadFindDuplicate:
     self.avoider.suffix(fname, uploaded = True)
     return True
 
+  def utf8safepath(self, path):
+    try:
+      path.encode('utf-8')
+    except UnicodeDecodeError:
+      newpath = safetxt(path)
+      self.warn('UTF-8 issue with file ' + path + '. Renaming to: ' + newpath)
+      try:
+        os.rename(path, newpath)
+      except:
+        self.logger.exception('while renameing ' + path + ' to ' + newpath)
+        raise
+      path = newpath
+    return path
+  
+  @staticmethod
+  def safetxt(x):
+    x = x.replace('ä', 'ae')
+    x = x.replace('ö', 'oe')
+    x = x.replace('ü', 'ue')
+    x = x.replace('Ä', 'Ae')
+    x = x.replace('Ö', 'Oe')
+    x = x.replace('Ü', 'Ue')
+    return x  
+
 class FindDuplicate:
   def __init__(self):
     self.localdb = LocalDB()
@@ -312,6 +342,9 @@ class FindDuplicate:
   def findDuplicate(self):
     for line in self.localdb.findDupOnHash():
       print(line)
+##
+## Unit test
+##
 
 class TestSomeDetails(unittest.TestCase):
   def test_upper(self):
@@ -323,6 +356,7 @@ class TestSomeFlickrRoutines(unittest.TestCase):
     # https://www.flickr.com/photos/tags/hash:o=9f38318b6ad55089f68cc2efc16e945a1fea21ba548f7f672416b65c227e675c --> 1 photo
     (already, result) = DuplicateAvoid(FlickrAccess()).isalreadyuploaded_flickr('9f38318b6ad55089f68cc2efc16e945a1fea21ba548f7f672416b65c227e675c')
     #(already, result) = DuplicateAvoid(FlickrAccess()).isalreadyuploaded_flickr('9f383')
+    logging.getLogger('TestSomeFlickrRoutines').debug('unittest search result: ' + ET.tostring(result))
     self.assertTrue(already)
 
   ##def test_hashShouldNotExist(self):
@@ -343,6 +377,10 @@ class TestDuplicateAvoid(unittest.TestCase):
     self.assertFalse(DuplicateAvoid.hashashintags('sadkjsd'))
     self.assertFalse(DuplicateAvoid.hashashintags(None))
     self.assertTrue(DuplicateAvoid.hashashintags('hash:o=1387162378'))
+
+##
+## main
+##
 
 def main(argv):
   parser = argparse.ArgumentParser(description='Upload photos to flickr and avoid duplicates.')
